@@ -1,0 +1,5 @@
+cs_id,cheff,dcheff,Pcpmax,V2G,Min Charge (W),ev place connection,Place End,Fase,Type,cp_id,csconnected
+1,0.98,1,7200,1,2300,1,2,1,1,1,1
+1,1,1,3600,1,0,1,1,1,2,2,2
+1,0.98,1,7200,1,2300,2,3,2,1,3,3
+1,1,1,3600,1,0,2,1,2,2,4,4
