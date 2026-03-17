@@ -447,7 +447,7 @@ model.FOag = pyo.Objective(rule = _FOag, sense = pyo.minimize)
 from pyomo.opt import SolverFactory
 model.write('res_V4_EC.lp',  io_options={'symbolic_solver_labels': True})
 
-opt = pyo.SolverFactory('cplex', executable='C:\\Program Files\\IBM\\ILOG\\CPLEX_Studio2211\\cplex\\bin\\x64_win64\\cplex.exe')
+opt = pyo.SolverFactory('cplex', executable='C:\\Program Files\\IBM\\ILOG\\CPLEX_Studio129\\cplex\\bin\\x64_win64\\cplex.exe')
 opt.options['LogFile'] = 'res_V4_EC.log'
 
 results = opt.solve(model)#, tee=True)
