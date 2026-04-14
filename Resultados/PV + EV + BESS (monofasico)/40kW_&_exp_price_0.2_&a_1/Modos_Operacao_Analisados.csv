@@ -1,0 +1,25 @@
+,Modo_Operacao
+1,IDLE
+2,ARB (Charge)
+3,ARB (Charge)
+4,ARB (Charge)
+5,ARB (Charge)
+6,IDLE
+7,IDLE
+8,ARB (Charge)
+9,ARB (Charge)
+10,ARB (Charge)
+11,SC (Discharge)
+12,ARB (Discharge)
+13,ARB (Discharge)
+14,ARB (Discharge)
+15,ARB (Discharge)
+16,ARB (Charge)
+17,ARB (Charge)
+18,ARB (Charge)
+19,ARB (Discharge)
+20,SC (Discharge)
+21,IDLE
+22,IDLE
+23,ARB (Charge)
+24,ARB (Charge)
