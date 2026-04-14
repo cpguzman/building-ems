@@ -1,0 +1,2 @@
+initial_soc,Pmax_charge_rate,Pmax_discharge_rate,Emax,Emin,eff
+0.15,2500,2500,10000,0,0.97
