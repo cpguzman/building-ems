@@ -143,25 +143,27 @@ model.PCPdc = pyo.Var(model.cp, model.t, domain = pyo.NonNegativeReals, initiali
 model.cpa = pyo.Var(model.cp, model.t, domain = pyo.Binary, bounds=(0, 1), initialize=0)# Active connector (Binary)
 
 # --- Grid ---
-
+'''
 # monofasico
 model.grid_import = pyo.Var(model.t, domain=pyo.NonNegativeReals, initialize = 0)
 model.grid_export = pyo.Var(model.t, domain=pyo.NonNegativeReals, initialize = 0) 
 '''
-trifasico
+#trifasico
 model.grid_import = pyo.Var(model.f, model.t, domain=pyo.NonNegativeReals, initialize = 0)
 model.grid_export = pyo.Var(model.f, model.t, domain=pyo.NonNegativeReals, initialize = 0) 
-'''
 
-model.is_importing = pyo.Var(model.t, domain=pyo.Binary, bounds=(0, 1), initialize=0)      # System importing? (Binary)
-model.is_exporting = pyo.Var(model.t, domain=pyo.Binary, bounds=(0, 1), initialize=0)      # System exporting? (Binary)
+model.is_importing = pyo.Var(model.f, model.t, domain=pyo.Binary, bounds=(0, 1), initialize=0)      # System importing? (Binary)
+model.is_exporting = pyo.Var(model.f, model.t, domain=pyo.Binary, bounds=(0, 1), initialize=0)      # System exporting? (Binary)
 
 # --- Relax. variables  ---
 model.Eminsocrelax = pyo.Var(model.ev, model.t, domain = pyo.NonNegativeReals, initialize = 0) # lower battery limit relax
 model.Etargetrelax = pyo.Var(model.ev, model.t, domain = pyo.NonNegativeReals, initialize = 0) # target relax
+'''
 #monofasico
 model.import_relax = pyo.Var(model.t, domain = pyo.NonNegativeReals, initialize = 0)
-#trifasico: model.import_relax = pyo.Var(model.f, model.t, domain = pyo.NonNegativeReals, initialize = 0)  # Imported power relax
+'''
+#trifasico: 
+model.import_relax = pyo.Var(model.f, model.t, domain = pyo.NonNegativeReals, initialize = 0)  # Imported power relax
 
 
 
@@ -395,7 +397,7 @@ model.bess_target_energy = pyo.Constraint(model.bat, model.t, rule=_bess_target_
 # =============================================================================
 # BALANÇO GERAL DE ENERGIA E LIMITES DA REDE
 # =============================================================================
-
+'''
 def _energy_balance(m, t): 
     ev_net_power = sum(m.PEV[ev,t] - m.PEVdc[ev,t] for ev in m.ev)
     
@@ -421,7 +423,8 @@ def _contracted_power_constraint2(m, t):
     total_pt = sum(m.pt[f,t] for f in m.f)
     return m.grid_export[t] <= total_pt * m.is_exporting[t] 
 model.contracted_power_constraint2 = pyo.Constraint(model.t, rule =_contracted_power_constraint2)
-""" trifasico
+'''
+# trifasico
 def _energy_balance(m, f, t): 
     # Mapeia apenas os EVs que estão ligados à fase 'f'
     evs_nesta_fase = [
@@ -448,22 +451,23 @@ model.energy_balance = pyo.Constraint(model.f, model.t, rule =_energy_balance)
 # Limite máximo de Importação 
 def _contracted_power_constraint(m, f, t): 
     # O import_relax permite ao solver pagar a pc_penalty em vez de dar erro "Infeasible"
-    return m.grid_import[f,t] <= m.pt[f,t] * m.is_importing[t] + m.import_relax[f,t]
+    return m.grid_import[f,t] <= m.pt[f,t] * m.is_importing[f,t] + m.import_relax[f,t]
 model.contracted_power_constraint = pyo.Constraint(model.f, model.t, rule =_contracted_power_constraint) 
 
-# Limite máximo de Exportação
+# Limite máximo de Exportação 
 def _contracted_power_constraint2(m, f, t): 
-    return m.grid_export[f,t] <= m.pt[f,t] * m.is_exporting[t] 
+    return m.grid_export[f,t] <= m.pt[f,t] * m.is_exporting[f,t] 
 model.contracted_power_constraint2 = pyo.Constraint(model.f, model.t, rule =_contracted_power_constraint2)  
-"""
-# Impede a Importação e Exportação em simultâneo
-def _importing_exporting(m, t): 
-    return m.is_importing[t] + m.is_exporting[t] <= 1
-model.importing_exporting = pyo.Constraint(model.t, rule =_importing_exporting)
+
+# Impede a Importação e Exportação em simultâneo na mesma fase
+def _importing_exporting(m, f, t): 
+    return m.is_importing[f,t] + m.is_exporting[f,t] <= 1
+model.importing_exporting = pyo.Constraint(model.f, model.t, rule =_importing_exporting)
 
 
 #************************************************************************Objective Function***********************************************************
-#monofasico
+
+'''#monofasico
 def _FOag(m):
     # 1. Custos da Rede
     custos_rede = sum(
@@ -486,7 +490,8 @@ def _FOag(m):
         for t in np.arange(1, n_time + 1)
     )
     return custos_rede + custos_evs
-"""trifasico
+'''
+#trifasico
 def _FOag(m):
     # 1. Custos da Rede
     custos_rede = sum(
@@ -516,7 +521,7 @@ def _FOag(m):
     )
     
     return custos_rede + custos_evs
-"""
+
 model.FOag = pyo.Objective(rule = _FOag, sense = pyo.minimize)
 
 #************************************************************************Solve the model***********************************************************
@@ -570,11 +575,11 @@ bess_charging_df = ext_pyomo_vals(model.bess_is_charging)
 bess_discharging_df = ext_pyomo_vals(model.bess_is_discharging)
 
 # Extracting three-phase data and organizing into separate columns (DINÂMICO)
-#grid_import_df_3colums = pd.DataFrame(grid_import_df.values.T, index=range(1, n_time + 1))
-#grid_import_df_3colums.columns = ['grid_import_ph1', 'grid_import_ph2', 'grid_import_ph3']   trifasico
+grid_import_df_3colums = pd.DataFrame(grid_import_df.values.T, index=range(1, n_time + 1))
+grid_import_df_3colums.columns = ['grid_import_ph1', 'grid_import_ph2', 'grid_import_ph3']   #trifasico
 
-#grid_export_df_3colums = pd.DataFrame(grid_export_df.values.T, index=range(1, n_time + 1))
-#grid_export_df_3colums.columns = ['grid_export_ph1', 'grid_export_ph2', 'grid_export_ph3']
+grid_export_df_3colums = pd.DataFrame(grid_export_df.values.T, index=range(1, n_time + 1))
+grid_export_df_3colums.columns = ['grid_export_ph1', 'grid_export_ph2', 'grid_export_ph3']
 
 EEVmax_df = ext_pyomo_vals(model.EEVmax)
 Etargetrelax_df = ext_pyomo_vals(model.Etargetrelax) # Atualizado
@@ -616,11 +621,11 @@ PEVdc_df.to_csv(folder + '/PEVdc.csv')
 PCPdc_df.to_csv(folder + '/PCPdc.csv')
 PEV_df.sum().to_csv(folder + '/PEV_h.csv')
 PEVdc_df.sum().to_csv(folder + '/PEVdc_h.csv')
-grid_import_df.sum().to_csv(folder + '/grid_import_h.csv')
-#grid_import_df_3colums.to_csv(folder + '/grid_import_per_phase.csv')
+#grid_import_df.sum().to_csv(folder + '/grid_import_h.csv')
+grid_import_df_3colums.to_csv(folder + '/grid_import_per_phase.csv')
 
-grid_export_df.sum().to_csv(folder + '/grid_export_h.csv')
-#grid_export_df_3colums.to_csv(folder + '/grid_export_per_phase.csv')
+#grid_export_df.sum().to_csv(folder + '/grid_export_h.csv')
+grid_export_df_3colums.to_csv(folder + '/grid_export_per_phase.csv')
 
 Etargetrelax_df.to_csv(folder + '/Etargetrelax.csv')
 Etargetrelax_df.sum().to_csv(folder + '/Etargetrelax_h.csv')
@@ -639,26 +644,26 @@ PBess_df.sum().to_csv(folder + '/PBess_h.csv')
 PBessdc_df.sum().to_csv(folder + '/PBessdc_h.csv')
 
 # Creating a CSV with the grid accounts
-#grid_accounts = pd.concat([import_price_df, export_price_df, grid_import_df_3colums, grid_export_df_3colums], axis=1)
+grid_accounts = pd.concat([import_price_df, export_price_df, grid_import_df_3colums, grid_export_df_3colums], axis=1)
 
 # Renaming the columns
-#novos_nomes = list(grid_accounts.columns)
-#novos_nomes[0] = 'import_price'
-#novos_nomes[1] = 'export_price'
-#grid_accounts.columns = novos_nomes
+novos_nomes = list(grid_accounts.columns)
+novos_nomes[0] = 'import_price'
+novos_nomes[1] = 'export_price'
+grid_accounts.columns = novos_nomes
 
 # Doing the accounts
-#grid_accounts['grid_import_ph1*import_price'] = grid_accounts['grid_import_ph1'] * grid_accounts['import_price']
-#grid_accounts['grid_import_ph2*import_price'] = grid_accounts['grid_import_ph2'] * grid_accounts['import_price']
-#grid_accounts['grid_import_ph3*import_price'] = grid_accounts['grid_import_ph3'] * grid_accounts['import_price']
-#grid_accounts['total_grid_import*import_price'] = grid_accounts['grid_import_ph1*import_price'] + grid_accounts['grid_import_ph2*import_price'] + grid_accounts['grid_import_ph3*import_price']
+grid_accounts['grid_import_ph1*import_price'] = grid_accounts['grid_import_ph1'] * grid_accounts['import_price']
+grid_accounts['grid_import_ph2*import_price'] = grid_accounts['grid_import_ph2'] * grid_accounts['import_price']
+grid_accounts['grid_import_ph3*import_price'] = grid_accounts['grid_import_ph3'] * grid_accounts['import_price']
+grid_accounts['total_grid_import*import_price'] = grid_accounts['grid_import_ph1*import_price'] + grid_accounts['grid_import_ph2*import_price'] + grid_accounts['grid_import_ph3*import_price']
 
-#grid_accounts['grid_export_ph1*export_price'] = grid_accounts['grid_export_ph1'] * grid_accounts['export_price']
-#grid_accounts['grid_export_ph2*export_price'] = grid_accounts['grid_export_ph2'] * grid_accounts['export_price']
-#grid_accounts['grid_export_ph3*export_price'] = grid_accounts['grid_export_ph3'] * grid_accounts['export_price']
-#grid_accounts['total_grid_export*export_price'] = grid_accounts['grid_export_ph1*export_price'] + grid_accounts['grid_export_ph2*export_price'] + grid_accounts['grid_export_ph3*export_price']
+grid_accounts['grid_export_ph1*export_price'] = grid_accounts['grid_export_ph1'] * grid_accounts['export_price']
+grid_accounts['grid_export_ph2*export_price'] = grid_accounts['grid_export_ph2'] * grid_accounts['export_price']
+grid_accounts['grid_export_ph3*export_price'] = grid_accounts['grid_export_ph3'] * grid_accounts['export_price']
+grid_accounts['total_grid_export*export_price'] = grid_accounts['grid_export_ph1*export_price'] + grid_accounts['grid_export_ph2*export_price'] + grid_accounts['grid_export_ph3*export_price']
 
-#grid_accounts.to_csv(folder + '/grid_accounts.csv')
+grid_accounts.to_csv(folder + '/grid_accounts.csv')
 
 # Penalty calculations
 target_penalty = Etargetrelax_df * model.penalty2
@@ -674,98 +679,122 @@ ev_accounts.to_csv(folder + '/ev_accounts.csv')
 
 
 # =============================================================================
-# EXTRACÇÃO DOS DADOS PARA EXCEL (Fluxos de Potência + Preços + Estado dos EVs)
+# EXTRACÇÃO DOS DADOS PARA EXCEL
 # =============================================================================
 
-# 1. Extrair Variáveis de Potência
-pl_df = ext_pyomo_vals(model.pl)
-pv_df = ext_pyomo_vals(model.pv)
+# 1. Iniciar o dicionário para criar o DataFrame final
+excel_dict = {}
 
-# 2. Extrair Variáveis de Estado (Disponibilidade e Ação dos EVs)
-alpha_df = ext_pyomo_vals(model.alpha) 
-a_df = ext_pyomo_vals(model.a)         
-b_df = ext_pyomo_vals(model.b)         
+# --- PREÇOS E BESS (BATERIA) GLOBAL ---
+excel_dict['Preco_Importacao'] = [pyo.value(model.import_price[t]) for t in model.t]
+excel_dict['Preco_Exportacao'] = [pyo.value(model.export_price[t]) for t in model.t]
 
-# 3. Agregações (Somar fases e EVs)
-if len(pl_df.index) == fases:
-    total_pl = pl_df.sum(axis=0)
-    total_pv = pv_df.sum(axis=0)
-else:
-    total_pl = pl_df.sum(axis=1)
-    total_pv = pv_df.sum(axis=1)
 
-if len(PEV_df.index) == n_time:
-    total_EV_charge = PEV_df.sum(axis=1)
-    total_EV_discharge = PEVdc_df.sum(axis=1)
-    total_evs_connected = alpha_df.sum(axis=1)
-    total_evs_charging = a_df.sum(axis=1)
-    total_evs_discharging = b_df.sum(axis=1)
-else:
-    total_EV_charge = PEV_df.sum(axis=0)
-    total_EV_discharge = PEVdc_df.sum(axis=0)
-    total_evs_connected = alpha_df.sum(axis=0)
-    total_evs_charging = a_df.sum(axis=0)
-    total_evs_discharging = b_df.sum(axis=0)
-    
-if len(PBess_df.index) == n_time:
-    total_BESS_charge = PBess_df.sum(axis=1)
-    total_BESS_discharge = PBessdc_df.sum(axis=1)
-    total_BESS_soc = EBess_df.sum(axis=1)
-else:
-    total_BESS_charge = PBess_df.sum(axis=0)
-    total_BESS_discharge = PBessdc_df.sum(axis=0)
-    total_BESS_soc = EBess_df.sum(axis=0)
+# --- DADOS POR CATEGORIA (Fases lado a lado) ---
 
-#total_grid_import = grid_import_df_3colums.sum(axis=1)    trifasico
-#total_grid_export = grid_export_df_3colums.sum(axis=1)
+# 1. Importação da Rede
+for f in model.f:
+    excel_dict[f'Rede_Import_Fase{f}_kW'] = [pyo.value(model.grid_import[f, t]) for t in model.t]
 
-total_grid_import = grid_import_df.sum(axis=1)    #monofasico
-total_grid_export = grid_export_df.sum(axis=1)
+# 2. Exportação para a Rede
+for f in model.f:
+    excel_dict[f'Rede_Export_Fase{f}_kW'] = [pyo.value(model.grid_export[f, t]) for t in model.t]
 
-# Extrair Preços
-preco_imp = import_price_df.values.flatten()
-preco_exp = export_price_df.values.flatten()
+# 3. Consumo da Instalação (PL)
+for f in model.f:
+    excel_dict[f'Instalacao_PL_Fase{f}_kW'] = [pyo.value(model.pl[f, t]) for t in model.t]
 
-# 4. Criar a Tabela Final
-fluxos_df = pd.DataFrame({
-    'Instante': range(1, n_time + 1),
-    'Preco_Importacao': preco_imp,
-    'Preco_Exportacao': preco_exp,
-    'VEs_Ligados_Total': total_evs_connected.values,
-    'VEs_a_Carregar': total_evs_charging.values,
-    'VEs_a_Descarregar': total_evs_discharging.values,
-    'Rede_Importacao_kW': total_grid_import.values,
-    'Rede_Exportacao_kW': total_grid_export.values,
-    'VE_Carga_kW': total_EV_charge.values,
-    'VE_Descarga_kW': total_EV_discharge.values,
-    'BESS_Carga_kW': total_BESS_charge.values,       
-    'BESS_Descarga_kW': total_BESS_discharge.values, 
-    'Instalacao_PL_kW': total_pl.values,
-    'Solar_PV_kW': total_pv.values
-})
-fluxos_df.set_index('Instante', inplace=True)
+# 4. Produção Solar (PV)
+for f in model.f:
+    excel_dict[f'Solar_PV_Fase{f}_kW'] = [pyo.value(model.pv[f, t]) for t in model.t]
 
-# =============================================================================
-# EXTRACÇÃO DE ENERGIAS E RELAXAMENTOS PARA EXCEL
-# =============================================================================
+# 5. BESS Carga
+for f in model.f:
+    excel_dict[f'BESS_Carga_Fase{f}_kW'] = [pyo.value(sum(model.PBess[b, t] for b in model.bat)) / 3 for t in model.t]
 
-if len(EEV_df.index) == n_time:
-    total_soc_kwh = EEV_df.sum(axis=1) 
-    total_relax_minsoc = Eminsocrelax_df.sum(axis=1)
-    total_relax_target = Etargetrelax_df.sum(axis=1)
-else:
-    total_soc_kwh = EEV_df.sum(axis=0)
-    total_relax_minsoc = Eminsocrelax_df.sum(axis=0)
-    total_relax_target = Etargetrelax_df.sum(axis=0)
+# 6. BESS Descarga
+for f in model.f:
+    excel_dict[f'BESS_Descarga_Fase{f}_kW'] = [pyo.value(sum(model.PBessdc[b, t] for b in model.bat)) / 3 for t in model.t]
 
-# Criar uma coluna que soma todos os erros/penalizações
-total_erros_relaxamento = total_relax_minsoc + total_relax_target
+excel_dict['Energia_Armazenada_BESS_kWh'] = [pyo.value(sum(model.EBess[b, t] for b in model.bat)) for t in model.t]
 
-fluxos_df['Energia_Armazenada_VEs_kWh'] = total_soc_kwh.values
-fluxos_df['Energia_Armazenada_BESS_kWh'] = total_BESS_soc.values
-fluxos_df['Falhas_Relaxamento_kWh'] = total_erros_relaxamento.values
+# --- DADOS POR VEÍCULO ELÉTRICO ---
+for ev in model.ev:
+    excel_dict[f'VE{ev}_Ligado'] = [pyo.value(model.alpha[ev, t]) for t in model.t]
+    excel_dict[f'VE{ev}_a_Carregar'] = [pyo.value(model.a[ev, t]) for t in model.t]
+    excel_dict[f'VE{ev}_a_Descarregar'] = [pyo.value(model.b[ev, t]) for t in model.t]
+    excel_dict[f'VE{ev}_Carga_kW'] = [pyo.value(model.PEV[ev, t]) for t in model.t]
+    excel_dict[f'VE{ev}_Descarga_kW'] = [pyo.value(model.PEVdc[ev, t]) for t in model.t]
+    excel_dict[f'VE{ev}_Energia_kWh'] = [pyo.value(model.EEV[ev, t]) for t in model.t]
+    excel_dict[f'VE{ev}_Relaxamentos'] = [pyo.value(model.Eminsocrelax[ev, t] + model.Etargetrelax[ev, t]) for t in model.t]
 
+# 2. Criar DataFrame e Exportar para Excel
+fluxos_df = pd.DataFrame(excel_dict, index=list(model.t))
+fluxos_df.index.name = 'Instante'
 
 fluxos_df.to_excel(folder + '/Gestao_Energia_e_Veiculos_Final.xlsx', engine='openpyxl')
 
-print("\nFicheiro gerado com Sucesso!")
+print("\nFicheiro Excel detalhado gerado com Sucesso! ")
+
+# =============================================================================
+# GERAÇÃO AUTOMÁTICA DE GRÁFICOS (Versão Final: Limites Bilaterais e Escala 1-24)
+# =============================================================================
+import matplotlib.pyplot as plt
+import os
+
+print("\nA gerar o gráfico final de balanço de potência...")
+
+# Criar a figura com escala partilhada
+fig, axes = plt.subplots(3, 1, figsize=(14, 12), sharex=True, sharey=True)
+fig.suptitle('Balanço de Potência por Fase', fontsize=18, fontweight='bold')
+
+# Definir o intervalo de tempo exato de 1 a 24
+time_steps = list(range(1, n_time + 1))
+
+for f in model.f:
+    ax = axes[f-1]
+    
+    # Extração de dados
+    net_grid = [pyo.value(model.grid_import[f, t] - model.grid_export[f, t]) for t in model.t]
+    net_bess = [pyo.value(sum(model.PBess[b, t] - model.PBessdc[b, t] for b in model.bat)) / 3 for t in model.t]
+    
+    evs_nesta_fase = [ev for ev in model.ev if int(round(pyo.value(model.my_cp_fases[int(round(pyo.value(model.cpconnected[ev])))]))) == f]
+    net_ev = [pyo.value(sum(model.PEV[ev, t] - model.PEVdc[ev, t] for ev in evs_nesta_fase)) if evs_nesta_fase else 0 for t in model.t]
+    
+    pl_vals = [pyo.value(model.pl[f, t]) for t in model.t]
+    pv_vals = [-pyo.value(model.pv[f, t]) for t in model.t]
+    
+    # Limite Contratado (Importação e Exportação)
+    pt_vals_pos = [pyo.value(model.pt[f, t]) for t in model.t]
+    pt_vals_neg = [-pyo.value(model.pt[f, t]) for t in model.t]
+    
+    # --- DESENHAR AS LINHAS ---
+    ax.plot(time_steps, pl_vals, label='Consumo Base', color='black', linewidth=1, alpha=0.6)
+    ax.fill_between(time_steps, 0, pv_vals, label='Produção Solar', color='orange', alpha=0.3)
+    
+    # Limites da Rede (Vermelho tracejado em cima e em baixo)
+    ax.plot(time_steps, pt_vals_pos, label='Limite Import/Export', color='red', linestyle='--', linewidth=1.5)
+    ax.plot(time_steps, pt_vals_neg, color='red', linestyle='--', linewidth=1.5)
+    
+    ax.plot(time_steps, net_grid, label='Rede Líquida', color='dodgerblue', linewidth=2)
+    ax.plot(time_steps, net_bess, label='BESS Líquido', color='purple', linewidth=2, marker='o', markersize=3)
+    ax.plot(time_steps, net_ev, label='VEs Líquido', color='crimson', linewidth=2, marker='s', markersize=3)
+    
+    # Estilização
+    ax.set_title(f'Fase {f}', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Potência (W)')
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.axhline(0, color='black', linewidth=1)
+    
+    # Definir limites do eixo X e os ticks de 1 em 1 hora
+    ax.set_xlim(1, 24)
+    ax.set_xticks(time_steps)
+    
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0., fontsize='small')
+
+axes[-1].set_xlabel('Hora do Dia (h)')
+plt.tight_layout(rect=[0, 0, 0.85, 0.96])
+
+plot_path = os.path.join(folder, 'Grafico_Final_Balanço.png')
+plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+print(f"Gráfico atualizado guardado em: {plot_path}")
