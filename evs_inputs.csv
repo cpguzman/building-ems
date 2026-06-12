@@ -1,2 +1,2 @@
-Esoc,EEVmin,EEVmax,Etrip,PchmaxEV ,PdchmaxEV,evcheff,evdcheff,cpconnected,v2gev,ev_id,ev target,Min Charge (kW)
+Esoc,EEVmin,EEVmax,Etrip,PchmaxEV ,PdchmaxEV,evcheff,evdcheff,cpconnected,v2gev,ev_id,ev target,Min Charge (W)
 5000,4000,40000,12000,11000,11000,0.92,0.92,1,1,1,0.9,2300

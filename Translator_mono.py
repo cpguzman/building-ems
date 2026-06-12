@@ -36,38 +36,34 @@ def definir_modo_operacao(row, p_grid_max):
     # -------------------------------------------------------------------------
     
     # 1. Peak Shaving (PS)
-    # Triggered if batteries/EVs are discharging AND the facility's raw load exceeds the grid limit.
-    # The system is discharging specifically to avoid grid penalties.
     if p_dis_total > tol and p_load > p_grid_max:
         return "PS"
         
-    # 2. Vehicle-to-Home (V2H) and Self-Consumption (SC - Discharge)
-    # Triggered if storage is discharging, but NOT selling to the grid (export is ~0).
-    # This means the discharged energy is being consumed locally by the facility.
+    # 2. Arbitrage (Charge)
+    elif p_ch_total > tol and p_grid_buy > tol:
+        if p_dis_bat > tol:
+            return "ARB (Mixed Charge)"      # Bateria descarrega para apoiar a rede
+        elif p_ch_bat > tol:
+            return "ARB (Pure Charge)"       # Bateria e EV carregam em simultâneo
+        else:
+            return "ARB (EV Charge Only)"    # Bateria fica em repouso (IDLE), só o EV carrega
+        
+    # 3. Vehicle-to-Home (V2H) and Self-Consumption (SC - Discharge)
     elif p_dis_total > tol and p_grid_sell <= tol:
-        # If the EV is contributing to the discharge, classify it as V2H
         if p_dis_ev > tol:
             return "V2H"                 
-        # Otherwise, only the stationary battery (BESS) is discharging
         else:
             return "SC (Discharge)"
             
-    # 3. Arbitrage (Trading energy with the grid for profit)
-    # Charge Arbitrage: Storing energy from the grid (buying) to use/sell later.
-    elif p_ch_total > tol and p_grid_buy > tol:
-        return "ARB (Charge)"
-    # Discharge Arbitrage: Selling stored energy back to the grid for profit.
+    # 4. Arbitrage (Discharge)
     elif p_dis_total > tol and p_grid_sell > tol:
         return "ARB (Discharge)"
         
-    # 4. Self-Consumption (SC - Charge) / Solar Charging
-    # Triggered if storage is charging, but NOT buying from the grid (import is ~0).
-    # This implies the batteries/EVs are charging exclusively from excess Solar PV.
+    # 5. Self-Consumption (SC - Charge) / Solar Charging
     elif p_ch_total > tol and p_grid_buy <= tol:
         return "SC (Charge)"
         
-    # 5. IDLE
-    # If no significant charging or discharging is happening, the system is resting.
+    # 6. IDLE
     else:
         return "IDLE"
 
@@ -92,8 +88,8 @@ def processar_modos_csv():
         P_GRID_MAX = df_css.apply(pd.to_numeric, errors='coerce').values.sum()
         print(f"-> P_GRID_MAX successfully read: {P_GRID_MAX} W")
     except FileNotFoundError:
-        print("-> File 'css_power.csv' not found. Using default value: 20700 W.")
-        P_GRID_MAX = 20700
+        print("-> File 'css_power.csv' not found. Using default value: 6900 W.")
+        P_GRID_MAX = 6900
 
     # 3. Read the Facility Base Load (PL)
     try:
@@ -111,8 +107,8 @@ def processar_modos_csv():
         
         try:
             # 4.1 Read the new 3-Phase CSVs and aggregate them
-            grid_import_df = pd.read_csv(os.path.join(pasta, 'grid_import_per_phase.csv'), index_col=0)
-            grid_export_df = pd.read_csv(os.path.join(pasta, 'grid_export_per_phase.csv'), index_col=0)
+            grid_import_df = pd.read_csv(os.path.join(pasta, 'grid_import.csv'), index_col=0)
+            grid_export_df = pd.read_csv(os.path.join(pasta, 'grid_export.csv'), index_col=0)
             
             # Sum phases 1 + 2 + 3 to get the global facility import/export
             total_grid_import = grid_import_df.sum(axis=1) 

@@ -101,6 +101,9 @@ class BessRealTimeController:
                 emax_kwh = row['EEVmax'] / 1000.0
                 esoc_kwh = row['Esoc'] / 1000.0
                 soc_inicial = esoc_kwh / emax_kwh if emax_kwh > 0 else 0.0
+                # If no EV SoC target is defined, use other by default
+                raw_target = row.get('ev target', 0.90)
+                target_soc_limpo = 0.90 if pd.isna(raw_target) else float(raw_target)
                 
                 self.ev_states[str(idx)] = {
                     'Pmax_ch': row['PchmaxEV'] / 1000.0,
@@ -109,7 +112,7 @@ class BessRealTimeController:
                     'soc': soc_inicial,
                     'eff': row['evcheff'],
                     # Safely read 'ev target' column. Defaults to 0.90 if missing.
-                    'target_soc': float(row.get('ev target', 0.90))
+                    'target_soc': target_soc_limpo
                 }
                 
                 # Link the EV to its physical grid phase
@@ -194,7 +197,7 @@ class BessRealTimeController:
         if self.alpha_data is None:
             return 24 - current_hour
             
-        # Helper function for safe alpha reading
+        # Helper function for alpha reading
         def get_alpha_seguro(h):
             a_val = get_value_from_df(self.alpha_data, ev_id, h, default=None)
             if a_val is None:
