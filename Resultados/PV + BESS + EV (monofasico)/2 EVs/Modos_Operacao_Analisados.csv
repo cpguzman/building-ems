@@ -1,0 +1,25 @@
+Hora,Modo_Operacao
+1,ARB (Pure Charge)
+2,ARB (Pure Charge)
+3,IDLE
+4,IDLE
+5,IDLE
+6,ARB (Pure Charge)
+7,ARB (Pure Charge)
+8,ARB (Mixed Charge)
+9,ARB (Mixed Charge)
+10,ARB (Mixed Charge)
+11,ARB (Mixed Charge)
+12,ARB (Mixed Charge)
+13,SC (Charge)
+14,SC (Charge)
+15,ARB (EV Charge Only)
+16,ARB (Mixed Charge)
+17,ARB (EV Charge Only)
+18,ARB (EV Charge Only)
+19,SC (Discharge)
+20,SC (Discharge)
+21,IDLE
+22,IDLE
+23,ARB (Pure Charge)
+24,ARB (Pure Charge)
