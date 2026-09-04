@@ -26,19 +26,18 @@ def _auxDictionary(a):
 #**************************************Data definition******************************************
 data = {}
 
-# CSV files from which the information is being retrieved.
 data['energy_price'] = pd.read_csv('energy_price.csv')
 data['evs_inputs'] = pd.read_csv('evs_inputs.csv')
 data['alpha'] = pd.read_csv('alpha.csv')
 data['css_inputs'] = pd.read_csv('css_inputs.csv')
 data['cp_inputs'] = pd.read_csv('cp_inputs.csv')
-data['pl'] = pd.read_csv('pl.csv')  # DEVE TER APENAS 1 COLUNA (Global)
-data['pt'] = pd.read_csv('pt.csv')  # DEVE TER APENAS 1 COLUNA (Global)
-data['pv'] = pd.read_csv('pv.csv')  # DEVE TER APENAS 1 COLUNA (Global)
-data['css_power'] = pd.read_csv('css_power.csv') # DEVE TER APENAS 1 VALOR (Limite global)
+data['pl'] = pd.read_csv('pl.csv')  
+data['pt'] = pd.read_csv('pt.csv')  
+data['pv'] = pd.read_csv('pv.csv') 
+data['css_power'] = pd.read_csv('css_power.csv') 
 data['bess_inputs'] = pd.read_csv('bess_inputs.csv')
 
-# Variables representing time, electric vehicles, charging points, and shared stations.
+# Variables representing time, EVS, BESS, charging points
 n_time = data['energy_price']['dT'].size
 n_evs = data['evs_inputs']['Esoc'].size
 cp = data['cp_inputs']['cs_id'].size
@@ -47,7 +46,7 @@ n_bat = data['bess_inputs']['initial_soc'].size
 
 print(f"\nEVs: {n_evs}\nCharging Station {css}\nCharging Points: {cp}\nBats: {n_bat}")
 
-#***************************************Star time definition**********************************
+#***************************************Start time definition**********************************
 now = datetime.now()
 start_time = now.strftime("%H:%M:%S")
 print("Start Time =", start_time)
@@ -62,7 +61,7 @@ model.bat = pyo.Set(initialize = np.arange(1, n_bat + 1))
 
 #***************************************Parameters definition************************************
 
-# --- Production / Load Consumption (Monofásico - Indexado apenas ao tempo) ---
+# --- Production / Load Consumption ---
 model.pt = pyo.Param(model.t, initialize =_auxDictionary(data['pt'].to_numpy().flatten()))       
 model.pv = pyo.Param(model.t, initialize =_auxDictionary(data['pv'].to_numpy().flatten()))       
 model.pl = pyo.Param(model.t, initialize =_auxDictionary(data['pl'].to_numpy().flatten()))      
@@ -73,7 +72,6 @@ model.export_price = pyo.Param(model.t, initialize =_auxDictionary(data['energy_
 # --- Connections ---
 model.my_cs_id_cp = pyo.Param(model.cp, initialize =_auxDictionary(data['cp_inputs'].to_numpy()[:,0])) 
 model.cpconnected = pyo.Param(model.ev, initialize =_auxDictionary(data['evs_inputs'].to_numpy()[:,8])) 
-# (my_cp_fases removido por já não ser necessário em monofásico)
 
 # --- BESS ---
 model.bess_max_charge_rate = pyo.Param(model.bat, initialize=_auxDictionary(data['bess_inputs'].to_numpy()[:,1]))  
@@ -95,6 +93,7 @@ model.evcheff = pyo.Param(model.ev, initialize =_auxDictionary(data['evs_inputs'
 model.evdcheff = pyo.Param(model.ev, initialize =_auxDictionary(data['evs_inputs'].to_numpy()[:,7])) 
 model.v2gev = pyo.Param(model.ev, initialize =_auxDictionary(data['evs_inputs'].to_numpy()[:,9]))    
 model.alpha = pyo.Param(model.ev, model.t, initialize = _auxDictionary(data['alpha'].to_numpy()))    
+model.PchminEV = pyo.Param(model.ev, initialize=_auxDictionary(data['evs_inputs']['Min Charge (W)'].to_numpy()))
 
 # --- Station / Connector characteristics ---
 model.Pcsmax = pyo.Param(model.cs, initialize = _auxDictionary(data['css_power'].to_numpy().flatten()))
@@ -181,7 +180,7 @@ def _conn_power_discharging_limit_2(m, ev, t, cp):
 model.conn_power_discharge_limit_2 = pyo.Constraint(model.ev, model.t, model.cp, rule = _conn_power_discharging_limit_2)
 
 # =============================================================================
-# LIMITE DE POTÊNCIA DA ESTAÇÃO / GARAGEM (MONOFÁSICO)
+# Station / Garage power limit
 # =============================================================================
 
 # 1. Limite Máximo de Consumo (Carga)
@@ -203,12 +202,16 @@ def _limite_estacao_total_min(m, cs, t):
 model.limite_estacao_total_min = pyo.Constraint(model.cs, model.t, rule=_limite_estacao_total_min)
 
 # =============================================================================
-# RESTRIÇÕES DOS VEÍCULOS ELÉTRICOS (EVs)
+#  EVs restrictions
 # =============================================================================
 
 def _power_charging_limit(m,ev,t): 
     return m.PEV[ev,t] <= m.PchmaxEV[ev] * m.alpha[ev,t] * m.a[ev,t]
 model.power_charging_limit2 = pyo.Constraint(model.ev, model.t, rule = _power_charging_limit)
+
+def _power_charging_limit_min_ev(m,ev,t):
+    return m.PEV[ev,t] >= m.PchminEV[ev] * m.alpha[ev,t] * m.a[ev,t]
+model.power_charging_limit_min_ev = pyo.Constraint(model.ev, model.t, rule = _power_charging_limit_min_ev)
 
 def _power_discharging_limit(m,ev,t): 
     return m.PEVdc[ev,t] <= m.PdchmaxEV[ev] * m.alpha[ev,t] * m.b[ev,t] * m.v2gev[ev] 
@@ -281,7 +284,7 @@ def _bess_target_energy(m, b, t):
 model.bess_target_energy = pyo.Constraint(model.bat, model.t, rule=_bess_target_energy)
 
 # =============================================================================
-# BALANÇO GERAL DE ENERGIA E LIMITES DA REDE (MONOFÁSICO)
+# Power balance and grid limits
 # =============================================================================
 
 def _energy_balance(m, t): 
@@ -309,15 +312,15 @@ model.importing_exporting = pyo.Constraint(model.t, rule =_importing_exporting)
 #************************************************************************Objective Function***********************************************************
 
 def _FOag(m):
-    # 1. Custos da Rede (Monofásico)
+    # 1. Grid costs
     custos_rede = sum(
         (m.grid_import[t] * m.dT[t] * m.import_price[t]) 
-        - (m.grid_export[t] * m.dT[t] * m.export_price[t]) 
+        - (m.grid_export[t] * m.dT[t] * m.import_price[t]) 
         + (m.import_relax[t] * m.dT[t] * m.pc_penalty)
         for t in np.arange(1, n_time + 1)
     )
     
-    # 2. Custos e Penalizações dos EVs
+    # 2. EVs penalizations and costs
     custos_evs = sum(
         (m.PEVdc[ev,t] * m.dT[t] * m.export_price[t] * m.DegCost)
         + ((m.EEVmax[ev] * m.target[ev]) - m.EEV[ev,t]) * m.m
@@ -368,7 +371,6 @@ import_price_df = ext_pyomo_vals(model.import_price)
 export_price_df = ext_pyomo_vals(model.export_price)
 EEV_df = ext_pyomo_vals(model.EEV)
 
-# O import/export agora já sai numa única coluna, não precisa de transposição
 grid_import_df = ext_pyomo_vals(model.grid_import) 
 grid_export_df = ext_pyomo_vals(model.grid_export)
 
@@ -397,7 +399,7 @@ print("Total Charge: {}".format(np.sum(PEV_df.to_numpy())))
 print("Total Discharge: {}".format(np.sum(PEVdc_df.to_numpy())))
 
 # =============================================================================
-# CÁLCULO DO CUSTO REAL DA ENERGIA (SEM PENALIZAÇÕES)
+# Energy real cost without penalties
 # =============================================================================
 custo_real_energia = sum(
     ((pyo.value(model.grid_import[t]) / 1000.0) * pyo.value(model.dT[t]) * pyo.value(model.import_price[t])) -
@@ -413,7 +415,7 @@ folder = 'RESULTS_' + str(n_evs)
 if not os.path.exists(folder):
     os.makedirs(folder)
     
-# Guardar as variáveis
+# Saving variables
 EEV_df.to_csv(folder + '/EEV.csv')
 EEVmax_df.to_csv(folder + '/EEVmax.csv')
 PEV_df.to_csv(folder + '/PEV.csv')
@@ -440,7 +442,7 @@ EBess_df.to_csv(folder + '/EBess.csv')
 bess_charging_df.to_csv(folder + '/bess_is_charging.csv')
 bess_discharging_df.to_csv(folder + '/bess_is_discharging.csv')
 
-# Totais horários (Somas) do BESS
+# BESS total hour sum
 PBess_df.sum().to_csv(folder + '/PBess_h.csv')
 PBessdc_df.sum().to_csv(folder + '/PBessdc_h.csv')
 
@@ -494,7 +496,7 @@ fluxos_df.to_excel(folder + '/Gestao_Energia_e_Veiculos_Final_Monofasico.xlsx', 
 print("\nFicheiro Excel detalhado gerado com Sucesso! ")
 
 # =============================================================================
-# GERAÇÃO AUTOMÁTICA DE GRÁFICOS (Monofásico)
+# GERAÇÃO AUTOMÁTICA DE GRÁFICOS 
 # =============================================================================
 print("\nA gerar o gráfico final de balanço de potência...")
 
@@ -515,7 +517,6 @@ pv_vals = [-pyo.value(model.pv[t]) for t in model.t]
 pt_vals_pos = [pyo.value(model.pt[t]) for t in model.t]
 pt_vals_neg = [-pyo.value(model.pt[t]) for t in model.t]
 
-# --- DESENHAR AS LINHAS ---
 ax.plot(time_steps, pl_vals, label='Consumo Base', color='black', linewidth=1, alpha=0.6)
 ax.fill_between(time_steps, 0, pv_vals, label='Produção Solar', color='orange', alpha=0.3)
 
@@ -527,7 +528,6 @@ ax.plot(time_steps, net_grid, label='Rede Líquida', color='dodgerblue', linewid
 ax.plot(time_steps, net_bess, label='BESS Líquido', color='purple', linewidth=2, marker='o', markersize=3)
 ax.plot(time_steps, net_ev, label='VEs Líquido', color='crimson', linewidth=2, marker='s', markersize=3)
 
-# Estilização
 ax.set_ylabel('Potência (W)')
 ax.set_xlabel('Hora do Dia (h)')
 ax.grid(True, linestyle=':', alpha=0.6)

@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Jul  7 10:57:18 2026
+
+@author: rafae
+"""
+
 import time
 import os
 import glob
@@ -15,8 +22,7 @@ logger = logging.getLogger(__name__)
 
 def get_value_from_df(df, row_id, col_val, default=0.0):
     """
-    Retrieves a value from a DataFrame given a row index and a column name.
-    If the DataFrame is empty, or the column/row doesn't exist, it returns a default value.
+    Retrieves a numeric value from a DataFrame given a row index and a column name.
     """
     if df is None: return default
     col_str = str(col_val)
@@ -28,16 +34,14 @@ def get_value_from_df(df, row_id, col_val, default=0.0):
 
 class BessRealTimeController:
     """
-    Layer 3: Real-Time Controller
-    Executes Operational Modes based purely on power flows and grid limits.
-    EVs ignore Optimizer setpoints and react purely to the semantic mode rules.
+    Layer 3: Real-Time Controller 
+    Attempts to blindly execute the optimizer's pre-calculated setpoints. 
     """
     def __init__(self, modes_path, pv_path, pl_path, bess_path, pbess_ch_path, pbess_dis_path, cp_path,
                  evs_path, alpha_path, pev_ch_path, pev_dis_path, p_grid_max, prices_path):
         """
-        Initializes the controller by loading all configuration and historical data files.
-        It maps out the physical constraints of the grid, the BESS, the Charging Points (CP), 
-        and the EVs, applying the most restrictive physical limits dynamically.
+        Initializes the controller by loading measurements, prices, hardware limits, 
+        and specifically the day-ahead planned setpoints for the BESS and EVs.
         """
         self.P_GRID_MAX = p_grid_max 
         
@@ -105,7 +109,7 @@ class BessRealTimeController:
                         
                     cp_types[cp_id] = cp_type
                     cp_mins[cp_id] = min_ch
-                    cp_maxs[cp_id] = cp_max 
+                    cp_maxs[cp_id] = cp_max
         except Exception as e:
             logger.error(f"Erro ao ler cp_inputs: {e}")
 
@@ -128,41 +132,23 @@ class BessRealTimeController:
                 esoc_kwh = row['Esoc'] / 1000.0
                 soc_inicial = esoc_kwh / emax_kwh if emax_kwh > 0 else 0.0
                 
-                #  Ler o limite mínimo de bateria (EEVmin)
-                emin_kwh = row.get('EEVmin', 0.0) / 1000.0
-                min_soc_seguranca = emin_kwh / emax_kwh if emax_kwh > 0 else 0.10 # Assume 10% como default de segurança
-                
                 raw_target = row.get('ev target', 0.90)
                 target_soc_limpo = 0.90 if pd.isna(raw_target) else float(raw_target)
                 
-               
+                # CRUZAMENTO DOS DADOS
                 ficha_ligada = int(row.get('cpconnected', 1))
                 tipo_da_ficha = cp_types.get(ficha_ligada, 1) 
                 is_bin = True if tipo_da_ficha == 2 else False
                 
-               # LER E CRUZAR POTÊNCIAS MÁXIMAS E CAPACIDADE V2G 
+                # ---> LER E CRUZAR POTÊNCIAS MÁXIMAS <---
                 ev_pmax_ch = row['PchmaxEV'] / 1000.0
                 cp_pmax = cp_maxs.get(ficha_ligada, ev_pmax_ch)
-                real_pmax_ch = min(ev_pmax_ch, cp_pmax) # Fica com o mais "fraco"
-                
-                # 1. Ler a coluna 'v2gev' (1 = Permite Descarga, 0 = Não permite)
-                v2g_flag = int(row.get('v2gev', 0))
-                
-                
-                # Tenta ler do CSV uma coluna 'MaxDchPerHour'. Se não existir na tabela, aplica um default (ex: 3.0 kW)
-                limite_customizado_dch = float(row.get('MaxDchPerHour', 3.0)) 
+                real_pmax_ch = min(ev_pmax_ch, cp_pmax) 
                 
                 ev_pmax_dis = row['PdchmaxEV'] / 1000.0
+                real_pmax_dis = min(ev_pmax_dis, cp_pmax)
                 
-                # 2. Bloqueio Físico e Limite de Energia Horária
-                if v2g_flag == 1:
-                    # RTO fica limitado pelo mais fraco destes 3: 
-                    # O Inversor do Carro, o Inversor da Ficha, ou o Limite Customizado de Energia
-                    real_pmax_dis = min(ev_pmax_dis, cp_pmax, limite_customizado_dch)
-                else:
-                    real_pmax_dis = 0.0
-                
-              
+                # ---> LER E CRUZAR POTÊNCIAS MÍNIMAS <---
                 ev_min_ch = 0.0
                 if 'Min Charge (kW)' in row:
                     ev_min_ch = float(row['Min Charge (kW)'])
@@ -170,7 +156,7 @@ class BessRealTimeController:
                     ev_min_ch = float(row['Min Charge (W)']) / 1000.0
                     
                 cp_min_charge_kw = cp_mins.get(ficha_ligada, 0.0)
-                real_pmin_ch = max(ev_min_ch, cp_min_charge_kw) # Fica com o mais exigente!
+                real_pmin_ch = max(ev_min_ch, cp_min_charge_kw) 
                 
                 self.ev_states[ev_id_limpo] = {
                     'Pmax_ch': real_pmax_ch,  
@@ -181,9 +167,7 @@ class BessRealTimeController:
                     'eff': row.get('evcheff', 0.95),
                     'dch_eff': row.get('evdcheff', 0.95),
                     'target_soc': target_soc_limpo,
-                    'is_binary': is_bin,
-                    'is_v2g': v2g_flag == 1,
-                    'min_soc': min_soc_seguranca
+                    'is_binary': is_bin 
                 }
         except Exception as e:
             logger.error(f"Error configuring EVs: {e}")
@@ -195,7 +179,7 @@ class BessRealTimeController:
         except: 
             self.alpha_data = None
 
-        # Guarda os dados do Otimizador apenas para Log e comparação no Excel
+        # Guardamos os dados do Otimizador apenas para Log e comparação no Excel
         try:
             self.df_planned_ev_ch = pd.read_csv(pev_ch_path, index_col=0)
             self.df_planned_ev_dis = pd.read_csv(pev_dis_path, index_col=0)
@@ -203,19 +187,13 @@ class BessRealTimeController:
             self.df_planned_ev_ch, self.df_planned_ev_dis = None, None
 
     def get_current_mode(self, current_hour):
-        """
-        Retrieves the operational mode string (e.g., 'PS', 'SC (Charge)') targeted for the specified hour.
-        Returns 'IDLE' if no mode is defined.
-        """
+        """Fetches the operational mode (though primarily ignored in Case B execution)."""
         if self.operation_modes is not None and current_hour in self.operation_modes.index:
             return self.operation_modes.loc[current_hour, 'Modo_Operacao']
         return "IDLE"
 
     def get_measurements_for_hour(self, current_hour):
-        """
-        Retrieves the PV generation (pv_val) and building power load (pl_val) 
-        measurements for a given hour index (converted to kW).
-        """
+        """Fetches building load and solar generation in kW for the requested hour."""
         col_idx = current_hour - 1 
         pv_val = 0.0
         pl_val = 0.0
@@ -233,9 +211,7 @@ class BessRealTimeController:
         return pv_val, pl_val
     
     def get_price_for_hour(self, current_hour):
-        """
-        Fetches the grid import and export energy prices for the given hour.
-        """
+        """Fetches dynamic grid import and export prices."""
         if self.prices_data is None: 
             return None, None
         col_idx = current_hour - 1
@@ -258,8 +234,8 @@ class BessRealTimeController:
     
     def get_optimizer_setpoints(self, current_hour):
         """
-        Retrieves the optimization setpoints (pre-planned charging/discharging curves) 
-        and the alpha connection flags (1 if plugged in, 0 if unplugged) for the current hour.
+        Retrieves the exact power setpoints that the day-ahead optimizer calculated.
+        In Case B, these setpoints are the primary drivers of execution.
         """
         bess_ch = get_value_from_df(self.df_planned_bess_ch, self.df_planned_bess_ch.index[0] if self.df_planned_bess_ch is not None else 0, current_hour) / 1000.0
         bess_dis = get_value_from_df(self.df_planned_bess_dis, self.df_planned_bess_dis.index[0] if self.df_planned_bess_dis is not None else 0, current_hour) / 1000.0
@@ -268,16 +244,24 @@ class BessRealTimeController:
         evs_planned_log = {}
         alphas = {}
         
-        # Iterar com 'enumerate' para usar a posição real da linha (0, 1, 2...)
         for i, ev_id in enumerate(self.ev_states.keys()):
-            ev_ch = get_value_from_df(self.df_planned_ev_ch, ev_id, current_hour) / 1000.0
-            ev_dis = get_value_from_df(self.df_planned_ev_dis, ev_id, current_hour) / 1000.0
+            ev_ch = 0.0
+            if self.df_planned_ev_ch is not None and str(current_hour) in self.df_planned_ev_ch.columns:
+                if i < len(self.df_planned_ev_ch):
+                    ev_ch = self.df_planned_ev_ch.iloc[i][str(current_hour)] / 1000.0
+                    
+            ev_dis = 0.0
+            if self.df_planned_ev_dis is not None and str(current_hour) in self.df_planned_ev_dis.columns:
+                if i < len(self.df_planned_ev_dis):
+                    ev_dis = self.df_planned_ev_dis.iloc[i][str(current_hour)] / 1000.0
+                    
             evs_planned_log[ev_id] = ev_ch - ev_dis
+            
             
             a_val = 0.0
             if self.alpha_data is not None and str(current_hour) in self.alpha_data.columns:
                 if i < len(self.alpha_data):
-                    a_val = self.alpha_data.iloc[i][str(current_hour)] # O .iloc[i] garante que nunca troca os EVs
+                    a_val = self.alpha_data.iloc[i][str(current_hour)]
             
             alphas[ev_id] = int(float(a_val))
             
@@ -285,262 +269,124 @@ class BessRealTimeController:
 
     def calculate_setpoints(self, current_hour, current_mode, pv_val, pl_val, bess_planned, evs_planned_log, alphas, preco_atual):
         """
-        Evaluates grid net load, battery limits, and EVs availability.
-        Uses priority routing based on the active operational mode to decide whether the BESS or EVs 
-        should absorb/dispatch power first.
+        CENÁRIO B: DAY-AHEAD SCHEDULING (Blind Setpoints + Proteção de Rede).
+        Tries to fulfill the optimizer's requested charge/discharge plan.
+        If real-time grid conditions differ from the forecast (e.g., PV is lower), 
+        it actively cuts the requested power to prevent the grid from exceeding P_GRID_MAX.
         """
-        # 1. Calcular a carga líquida da casa (Consumo - Produção Solar)
         net_load = pl_val - pv_val
+        margem_grid_disponivel = max(0.0, self.P_GRID_MAX - net_load)
+
+        # ====================================================================
+        # 2. EXECUÇÃO DO BESS 
+        # ====================================================================
+        bess_cmd = bess_planned
+        max_ch_kwh = ((1.0 - self.current_soc) * self.BESS_CAPACITY) / self.bess_eff
+        max_dis_kwh = (self.current_soc * self.BESS_CAPACITY) * self.bess_eff
         
-        # ====================================================================
-        # LIMITES FÍSICOS DA BATERIA (BESS)
-        # ====================================================================
-        # Calcula quanto a bateria consegue efetivamente carregar até chegar aos 100%
-        max_ch_soc_bess = ((1.0 - self.current_soc) * self.BESS_CAPACITY) / self.bess_eff
-        act_max_ch_bess = min(self.BESS_MAX_CH, max_ch_soc_bess) # Fica com o menor valor (Inversor vs Espaço Livre)
-        
-        # Calcula quanto a bateria consegue descarregar até chegar aos 5% de segurança
-        max_dis_soc_bess = ((self.current_soc - 0.05) * self.BESS_CAPACITY) * self.bess_eff
-        act_max_dis_bess = min(self.BESS_MAX_DIS, max_dis_soc_bess)
-
-        # ====================================================================
-        # MÓDULO 1: LÓGICA DE EXECUÇÃO DA BESS
-        # ====================================================================
-
-        def execute_bess(nl, m_imp, m_exp):
-            """
-            Calculates BESS power operations ensuring it stays within grid margins (import/export)
-            and acts according to the active mode
-            """
-            b_sp = 0.0
+        if bess_cmd > 0:
+            # Tenta carregar o planeado, mas limitado pelo espaço físico e pela REDE
+            bess_setpoint = min(bess_cmd, max_ch_kwh, self.BESS_MAX_CH, margem_grid_disponivel)
+        elif bess_cmd < 0:
+            # Descarga não consome margem de importação, logo não é limitada pelos 6.9 kW
+            bess_setpoint = -min(abs(bess_cmd), max_dis_kwh, self.BESS_MAX_DIS)
+        else:
+            bess_setpoint = 0.0
             
-            if current_mode == "PS": # Cortar Picos: descarrega apenas o excesso acima do limite
-                if nl > self.P_GRID_MAX: 
-                    b_sp = -min(nl - self.P_GRID_MAX, act_max_dis_bess)
-                    
-            elif current_mode == "SC (Charge)" and nl < 0: # Autoconsumo: absorve o sol que sobra
-                b_sp = min(abs(nl), act_max_ch_bess, m_imp)
-                
-            elif current_mode in ["SC (Discharge)", "V2H"] and nl > 0: # Suprir a casa: descarrega para a carga
-                b_sp = -min(nl, act_max_dis_bess)
-                
-            elif current_mode == "ARB (Pure Charge)": 
-                b_sp = min(act_max_ch_bess, m_imp)
-                
-            elif current_mode == "ARB (Mixed Charge)": 
-                # 1. Verifica se existe pelo menos um carro ligado e a precisar de energia
-                evs_prontos = sum(1 for ev, st in self.ev_states.items() if alphas.get(ev, 0) == 1 and st['soc'] < 0.99)
-                
-                if evs_prontos > 0:
-                    # Há carros - Descarrega a BESS para lhes dar a maior margem possível
-                    b_sp = -min(act_max_dis_bess, m_exp)
-                else:
-                    # Não há carros ligados (atrasaram-se ou já estão a 100%).
-                    # Cancela a exportação para a rede e reverte para o Autoconsumo normal da casa
-                    if nl > 0:
-                        b_sp = -min(nl, act_max_dis_bess)
-                    elif nl < 0:
-                        b_sp = min(abs(nl), act_max_ch_bess, m_imp)
-                    else:
-                        b_sp = 0.0
-                
-            elif current_mode == "ARB (EV Charge Only)": 
-                # O Otimizador quer a Bateria quieta para não gastar dinheiro desnecessário
-                b_sp = 0.0
-                    
-            elif current_mode in ["ARB (Discharge)", "ARB (Mixed Discharge)"]: 
-                b_sp = -min(act_max_dis_bess, m_exp)
-
-            # Prevenção de micro-ciclos e arredondamento a 1 casa decimal
-            if abs(b_sp) < 0.1: b_sp = 0.0
-            if b_sp > 0: b_sp = math.floor(b_sp * 10) / 10.0
-            elif b_sp < 0: b_sp = math.ceil(b_sp * 10) / 10.0
-            return b_sp
+        # Arredondamento
+        if abs(bess_setpoint) < 0.1: bess_setpoint = 0.0
+        elif bess_setpoint > 0: bess_setpoint = math.floor(bess_setpoint * 10) / 10.0
+        else: bess_setpoint = math.ceil(bess_setpoint * 10) / 10.0
+            
+        net_load += bess_setpoint
+        margem_grid_disponivel = max(0.0, self.P_GRID_MAX - net_load)
 
         # ====================================================================
-        # MÓDULO 2: LÓGICA DE EXECUÇÃO DOS EVs
+        # 3. EXECUÇÃO DOS EVs (Tenta seguir o plano Day-Ahead)
         # ====================================================================
-        def execute_evs(nl, m_imp, m_exp):
-            """
-            Calculates EV power distribution. 
-            Implements load balancing, priority based on charger types (binary vs continuous), 
-            and respects EV safety margins (SoC limit checks).
-            """
-            cmds = {ev_id: 0.0 for ev_id in self.ev_states.keys()}
-            acts = {ev_id: 0.0 for ev_id in self.ev_states.keys()}
-
-            
-            # A) Calcular a energia total disponível no momento para carregar EVs
-            potencia_disponivel = min(abs(nl), m_imp) if current_mode == "SC (Charge)" and nl < 0 else m_imp
-            
-            # B) Ler as necessidades dos carros ligados
-            req_binario_max = 0.0
-            req_continuo_min = 0.0
-            
-            for ev_id, state in self.ev_states.items():
-                if alphas.get(ev_id, 0) == 1: # Só avalia os que estão fisicamente ligados
-                    if state.get('is_binary', False):
-                        req_binario_max += state['Pmax_ch']
-                    else:
-                        req_continuo_min += state.get('Pmin_ch', 0.0)
-                        
-           
-            # Se a potência disponível suportar o carregador binário no máximo E a wallbox no mínimo:
-            if potencia_disponivel >= (req_binario_max + req_continuo_min):
-                prioridade_binario = True  # Dá prioridade ao binário para garantir que os dois carregam
-            else:
-                prioridade_binario = False # Prioridade à Wallbox para maximizar a energia total injetada
-                
-            ev_items_ordenados = sorted(self.ev_states.items(), key=lambda item: item[1].get('is_binary', False), reverse=prioridade_binario)
-
-            # 2. Conta quantos carros contínuos estão ativos (para dividir a margem de forma justa)
-            cont_ativos = sum(1 for ev, st in ev_items_ordenados if not st.get('is_binary', False) and alphas.get(ev, 0) == 1 and st['soc'] < 0.99)
-
-            for ev_id, state in ev_items_ordenados:
-                if alphas.get(ev_id, 0) == 0: continue
-
-                charger_max_ch = state['Pmax_ch']
-                charger_max_dis = state['Pmax_dis']
-                is_binary = state.get('is_binary', False)
-
-                # ---> Fair Share para Carregadores Contínuos <---
-                margem_alvo = m_imp
-                if not is_binary and cont_ativos > 0 and current_mode not in ["PS", "ARB (Discharge)", "SC (Discharge)", "V2H"]:
-                    margem_alvo = m_imp / cont_ativos
-
-                ev_cmd = 0.0
-
-                # Lógica baseada no Modo (usa a margem_alvo em vez da margem global)
-                if current_mode == "PS":
-                    if nl > self.P_GRID_MAX and charger_max_dis > 0: ev_cmd = -min(nl - self.P_GRID_MAX, charger_max_dis)
-                elif current_mode == "SC (Charge)":
-                    if nl < 0: ev_cmd = min(abs(nl), charger_max_ch, margem_alvo)
-                elif current_mode in ["SC (Discharge)", "V2H"]:
-                    if nl > 0 and charger_max_dis > 0: ev_cmd = -min(nl, charger_max_dis)
-                elif current_mode in ["ARB (Pure Charge)", "ARB (EV Charge Only)"]:
-                    ev_cmd = min(charger_max_ch, margem_alvo)
-                elif current_mode in ["ARB (Mixed Charge)"]:
-
-                    if evs_planned_log.get(ev_id, 0) > 0.05: # > 50W para evitar erros de arredondamento
-                        ev_cmd = min(charger_max_ch, margem_alvo)
-                    else:
-                        ev_cmd = 0.0 
-                elif current_mode == "ARB (Discharge)":
-                    if charger_max_dis > 0: ev_cmd = -min(charger_max_dis, m_exp)
-
-
-                if ev_cmd == 0.0 and current_mode not in ["SC (Discharge)", "V2H", "PS", "ARB (Discharge)"]:
-                    if nl < -0.1:
-                        ev_cmd = min(abs(nl), charger_max_ch, margem_alvo)
-                    elif preco_atual is not None and preco_atual <= 0.10:
-                        ev_cmd = min(charger_max_ch, margem_alvo)
-               
-
-                charger_min_ch = state.get('Pmin_ch', 0.0) # Vai buscar o mínimo
-
-                if is_binary:
-                    if ev_cmd > 0: # REGRA BINÁRIA DE CARGA
-                        if ev_cmd >= charger_max_ch * 0.95:  
-                            ev_cmd = charger_max_ch
-                        else:
-                            ev_cmd = 0.0 
-                    elif ev_cmd < 0: # REGRA BINÁRIA DE DESCARGA
-                        if abs(ev_cmd) >= charger_max_dis * 0.95:
-                            ev_cmd = -charger_max_dis
-                        else:
-                            ev_cmd = 0.0
-                            
-                # Regra para Contínuos: Se a potência é menor que o mínimo, desliga!
-                elif not is_binary and ev_cmd > 0:
-                    if ev_cmd < charger_min_ch * 0.95: 
-                        ev_cmd = 0.0
-
-                # Arredondamentos (o arredondamento negativo só se aplica a contínuos)
-                if abs(ev_cmd) < 0.1: ev_cmd = 0.0
-                if ev_cmd > 0 and not is_binary: ev_cmd = math.floor(ev_cmd * 10) / 10.0
-                elif ev_cmd < 0 and not is_binary: ev_cmd = math.ceil(ev_cmd * 10) / 10.0
-                
-                cmds[ev_id] = ev_cmd
-
-               # ==============================================================
-                # 2. REALIDADE FÍSICA (O SoC da Bateria do Carro aguenta?)
-                # ==============================================================
-                ev_max_ch_soc = ((1.0 - state['soc']) * state['Emax']) / state['eff']
-                
-
-                # O carro só pode descarregar a energia que está acima do SoC mínimo
-                soc_disponivel_para_descarga = max(0.0, state['soc'] - state['min_soc'])
-                ev_max_dis_soc = (soc_disponivel_para_descarga * state['Emax']) * state['dch_eff']
-
-                ev_act = ev_cmd
-                if ev_cmd > 0:
-                    ev_act = min(ev_cmd, ev_max_ch_soc)
-                    # Se for binário e a bateria já não conseguir engolir o bloco inteiro, aborta
-                    if is_binary and ev_act < charger_max_ch * 0.95:
-                        ev_act = 0.0
-                        
-                elif ev_cmd < 0:
-                    ev_act = -min(abs(ev_cmd), ev_max_dis_soc)
-                    # Se for binário e a bateria já não tiver energia para fornecer o bloco inteiro, aborta
-                    if is_binary and abs(ev_act) < charger_max_dis * 0.95:
-                        ev_act = 0.0
-
-                acts[ev_id] = ev_act
-
-                # A rede sente a alteração e atualiza a margem do quadro para o carro seguinte
-                nl += ev_act
-                m_imp = max(0.0, self.P_GRID_MAX - nl)
-                m_exp = max(0.0, self.P_GRID_MAX + nl)
-
-                # Se foi um contínuo a ser avaliado, reduzimos o contador para a próxima iteração
-                if not is_binary and cont_ativos > 0:
-                    cont_ativos -= 1
-
-            return cmds, acts, nl, m_imp, m_exp
-
-
-        # 1. Calcula as margens iniciais de energia que o Quadro Elétrico ainda suporta
-        margem_import = max(0.0, self.P_GRID_MAX - net_load)
-        margem_export = max(0.0, self.P_GRID_MAX + net_load)
-        
-        bess_setpoint = 0.0
         ev_cmds = {ev_id: 0.0 for ev_id in self.ev_states.keys()}
         ev_acts = {ev_id: 0.0 for ev_id in self.ev_states.keys()}
         
-        modos_ev_primeiro = ["ARB (Pure Charge)", "ARB (EV Charge Only)", "SC (Charge)"]
+        # Binários primeiro, porque se o corte da rede os afetar, caem logo para zero
+        ev_items_ordenados = sorted(self.ev_states.items(), key=lambda item: item[1].get('is_binary', False), reverse=True)
         
-        if current_mode in modos_ev_primeiro or (current_mode == "IDLE" and net_load < 0):
+        for ev_id, state in ev_items_ordenados:
+            if alphas.get(ev_id, 0) == 0:
+                continue
+                
+            ev_cmd_opt = evs_planned_log.get(ev_id, 0.0) # Usa a variável enviada pelo main!
+            charger_max_ch = state['Pmax_ch']
+            charger_max_dis = state['Pmax_dis']
+            charger_min_ch = state.get('Pmin_ch', 0.0)
+            is_binary = state.get('is_binary', False)
+            
+            ev_cmd = 0.0
+            
+            # ---> LÓGICA DO CENÁRIO B: Tentar fornecer exatamente a potência que o Otimizador pediu <---
+            if ev_cmd_opt > 0:
+                # O Otimizador quer carregar, mas a margem do quadro pode ser menor por falha de previsão
+                ev_cmd = min(ev_cmd_opt, charger_max_ch, margem_grid_disponivel)
+                
+                # Regras rígidas dos carregadores
+                if is_binary:
+                    if ev_cmd >= charger_max_ch * 0.95:
+                        ev_cmd = charger_max_ch
+                    else:
+                        ev_cmd = 0.0 # Cai a zero se a rede não aguentar!
+                else:
+                    if ev_cmd < charger_min_ch * 0.95:
+                        ev_cmd = 0.0
+                        
+            elif ev_cmd_opt < 0:
+                # O Otimizador quer descarregar (V2G/V2H)
+                ev_cmd = -min(abs(ev_cmd_opt), charger_max_dis)
+                if is_binary:
+                    if abs(ev_cmd) >= charger_max_dis * 0.95:
+                        ev_cmd = -charger_max_dis
+                    else:
+                        ev_cmd = 0.0
 
-            # Primeiro, o EV usa a margem da rede
-            ev_cmds, ev_acts, net_load, margem_import, margem_export = execute_evs(net_load, margem_import, margem_export)
-            # Segundo, a BESS só carrega/descarrega usando a margem que o EV deixou sobrar
-            bess_setpoint = execute_bess(net_load, margem_import, margem_export)
-            net_load += bess_setpoint
+            # Arredondamentos
+            if abs(ev_cmd) < 0.1: ev_cmd = 0.0
+            if ev_cmd > 0 and not is_binary: ev_cmd = math.floor(ev_cmd * 10) / 10.0
+            elif ev_cmd < 0 and not is_binary: ev_cmd = math.ceil(ev_cmd * 10) / 10.0
             
-        # MODO DE DESCARGA E MIXED: BESS atua primeiro (quer para vender, quer para dar "ajuda" aos EVs)
-        else:
-            # Primeiro, a BESS descarrega
-            bess_setpoint = execute_bess(net_load, margem_import, margem_export)
-            net_load += bess_setpoint
+            ev_cmds[ev_id] = ev_cmd
             
-            # Recalcula as margens da rede com a injeção da BESS (Aumenta o espaço para os EVs)
-            margem_import = max(0.0, self.P_GRID_MAX - net_load)
-            margem_export = max(0.0, self.P_GRID_MAX + net_load)
+            # Restrições Físicas da Bateria do Carro
+            ev_max_ch_soc = ((1.0 - state['soc']) * state['Emax']) / state['eff']
+            ev_max_dis_soc = (state['soc'] * state['Emax']) * state['dch_eff']
             
-            # Segundo, os EVs entram e veem a margem expandida (Rede + BESS)
-            ev_cmds, ev_acts, net_load, margem_import, margem_export = execute_evs(net_load, margem_import, margem_export)
-
+            ev_act = ev_cmd
+            if ev_cmd > 0:
+                ev_act = min(ev_cmd, ev_max_ch_soc)
+                if is_binary and ev_act < charger_max_ch * 0.95:
+                    ev_act = 0.0
+            elif ev_cmd < 0:
+                ev_act = -min(abs(ev_cmd), ev_max_dis_soc)
+                if is_binary and abs(ev_act) < charger_max_dis * 0.95:
+                    ev_act = 0.0
+                    
+            ev_acts[ev_id] = ev_act
+            
+            # Atualizar consumo da casa e reduzir a margem
+            net_load += ev_act
+            margem_grid_disponivel = max(0.0, self.P_GRID_MAX - net_load)
+            
         return bess_setpoint, ev_cmds, ev_acts, net_load
+        
+    
 
     def publish_and_update_soc(self, bess_setpoint, ev_acts):
         """
-        Updates the internal SoC parameters for the BESS and EV models.
+        Calculates physical SoC transitions for the BESS and EVs using actual execution power 
+        (accounting for hardware limits and efficiency loss).
         """
         # Update BESS
         transfer_bess = (bess_setpoint * 1.0) * self.bess_eff if bess_setpoint > 0 else (bess_setpoint * 1.0) / self.bess_eff
         self.current_soc = max(0.0, min(1.0, ((self.current_soc * self.BESS_CAPACITY) + transfer_bess) / self.BESS_CAPACITY))
         
-        # Update EV Observer (Baseado na Ação Real)
+        # Update EV Observer (Baseado na Ação Real, não no Comando)
         for ev_id, sp in ev_acts.items():
             state = self.ev_states[ev_id]
             if sp > 0:
@@ -557,9 +403,9 @@ class BessRealTimeController:
 
 def main():
     """
-    Prompts for a results folder, runs the simulation over a 24-hour cycle,
-    logs results, calculates day-ahead vs actual costs, exports a summary CSV, and creates
-    detailed visualization charts and LaTeX operational tables.
+    Extracts the user's selected scenario, calculates the real-world execution of the 
+    pre-planned setpoints over a 24-hour cycle, aggregates financial costs, and visualizes 
+    the system's physical constraints and behavior across multiple Matplotlib charts.
     """
     pastas = glob.glob('RESULTS_*')
     if not pastas:
@@ -580,8 +426,7 @@ def main():
     except Exception as e:
         limite_global_kw = 6.9 
         logger.warning(f"Error reading css_power.csv: {e}. Using default limit of 6.9 kW.")
-        
-    # Initialize the controller environment
+    
     controller = BessRealTimeController(
         modes_path=os.path.join(pasta_escolhida, 'Modos_Operacao_Analisados.csv'),
         pv_path=os.path.join(pasta_medicoes, 'pv.csv'),
@@ -645,7 +490,8 @@ def main():
         for ev_id in controller.ev_states.keys():
             estado = controller.ev_states[ev_id]
             
-            row_data[f'Alpha_EV{ev_id}'] = alphas.get(ev_id, 0)
+            row_data[f'Alpha_EV{ev_id}'] = alphas.get(ev_id, 0) # Guarda se o EV está ligado (1) ou não (0)
+            
             row_data[f'Opt_EV{ev_id}_kW'] = round(evs_planned_log.get(ev_id, 0), 3)
             row_data[f'Cmd_EV{ev_id}_kW'] = ev_cmds.get(ev_id, 0)
             row_data[f'Act_EV{ev_id}_kW'] = round(ev_acts.get(ev_id, 0), 3)
@@ -686,47 +532,7 @@ def main():
     limite_w = limite_global_kw
     
     # =========================================================================
-    # GERAÇÃO AUTOMÁTICA DA TABELA DE ESTADOS EM LATEX
-    # =========================================================================
-    modos = df_res['Modo_Operacao'].tolist()
-    
-    print("\n" + "="*60)
-    print(" CÓDIGO LATEX DA TABELA DE MODOS DE OPERAÇÃO:")
-    print("="*60)
-    
-    print("\\begin{table}[H]")
-    print("\\centering")
-    print("\\caption{Real-Time Operation Modes Timeline for Case C.1}")
-    print("\\label{tab:modes_c1}")
-    print("\\begin{tabular}{@{}lc@{}}") 
-    print("\\toprule")
-    print("\\textbf{Time Window} & \\textbf{Active Mode} \\\\ \\midrule")
-    
-    inicio_bloco = 1
-    modo_atual = modos[0]
-    
-    for i in range(1, 24):
-        if modos[i] != modo_atual:
-            fim_bloco = i
-
-            hora_inicio = inicio_bloco - 1
-            hora_fim = fim_bloco
-            
-            print(f"{hora_inicio:02d}:00 -- {hora_fim:02d}:00 & {modo_atual} \\\\")
-            
-            modo_atual = modos[i]
-            inicio_bloco = i + 1
-            
-    # Imprimir o último bloco (até às 24:00)
-    hora_inicio = inicio_bloco - 1
-    print(f"{hora_inicio:02d}:00 -- 24:00 & {modo_atual} \\\\ \\bottomrule")
-    
-    print("\\end{tabular}")
-    print("\\end{table}")
-    print("="*60 + "\n")
-    
-    # =========================================================================
-    # CONFIGURAÇÃO GERAL (Mantém o estilo LaTeX)
+    # CONFIGURAÇÃO GERAL (Mantém o teu estilo LaTeX)
     # =========================================================================
     plt.rcParams['text.usetex'] = False  
     plt.rcParams['font.family'] = 'serif'
@@ -754,7 +560,7 @@ def main():
     # 2. DESENHAR AS BARRAS DE PRODUÇÃO (Empilhadas)
     ax1.bar(x_prod, pv_w, width, label='PV Generation', color='#5fb060', edgecolor='black', linewidth=0.5, zorder=3)
     ax1.bar(x_prod, b_dis_w, width, bottom=pv_w, label='BESS Discharge', color='#8a2be2', edgecolor='black', linewidth=0.5, zorder=3)
-    ax1.bar(x_prod, ev_dis_w, width, bottom=pv_w + b_dis_w, label='EV Discharge', color='#e3242b', edgecolor='black', linewidth=0.5, zorder=3)
+    
     # 3. LINHAS DE REDE (Mantêm-se como Steps para cobrir a hora inteira)
     t_ext = np.insert(time_steps, 0, 0)
     imp_ext = np.insert(imp_w, 0, imp_w[0])
@@ -808,7 +614,7 @@ def main():
     plt.close(fig1)
 
    # -------------------------------------------------------------
-    # 2. GRÁFICOS ESPECÍFICOS PARA CADA EV
+    # 2. GRÁFICOS ESPECÍFICOS PARA CADA EV (Lado a Lado + Legenda Única)
     # -------------------------------------------------------------
     ev_ids = list(controller.ev_states.keys())
     num_evs = len(ev_ids)
@@ -909,7 +715,7 @@ def main():
             # Limite da potência igual para todos
             ax_pow.set_ylim(0, 7.5) 
             
-
+            # ---> ATUALIZAÇÃO DO EIXO DIREITO (ENERGIA) <---
             # O limite máximo de energia é a capacidade da bateria (Emax) + 5% de folga visual
             ax_soc.set_ylim(0.0, estado_ev['Emax'] * 1.05) 
             ax_soc.tick_params(axis='y', labelsize=17)
@@ -973,7 +779,6 @@ def main():
         caminho_final = os.path.join(pasta_escolhida, nome_ficheiro)
         fig_ev.savefig(caminho_final, dpi=600, bbox_inches='tight', pad_inches=0.02)
         plt.close(fig_ev)
-        
              
              
     # -------------------------------------------------------------
@@ -1006,9 +811,10 @@ def main():
             elif power_w[i] > 0:
                 pow_charging[i] = power_w[i]
             elif power_w[i] < 0:
-                # ---> Transforma a descarga (negativa) em positiva para o gráfico <---
+                # ---> MAGIA AQUI: Transforma a descarga (negativa) em positiva para o gráfico! <---
                 pow_discharging[i] = abs(power_w[i]) 
 
+      # --- TRUQUE: EXTENSÃO DOS ARRAYS PARA O BLOCO 0-1 ---
         t_ext = np.insert(time_steps, 0, 0)
         p_abs_ext = np.insert(power_w_abs, 0, power_w_abs[0])
         unp_ext = np.insert(pow_unplugged, 0, pow_unplugged[0])
@@ -1062,7 +868,7 @@ def main():
         ax_soc.set_ylabel('SoC (%)', fontsize=11)
         ax_soc.set_ylim(0.0, 1.05) 
         
-        # Eixo X encaixado no zero
+        # Eixo X encaixado no zero!
         ax_pow.set_xlim(0, 24)
         ax_pow.set_xticks(range(0, 25))
         
