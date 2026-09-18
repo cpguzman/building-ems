@@ -420,13 +420,17 @@ class BessRealTimeController:
                 elif current_mode in ["ARB (Pure Charge)", "ARB (EV Charge Only)"]:
                     ev_cmd = min(charger_max_ch, margem_alvo)
                 elif current_mode in ["ARB (Mixed Charge)"]:
-
                     if evs_planned_log.get(ev_id, 0) > 0.05: # > 50W para evitar erros de arredondamento
                         ev_cmd = min(charger_max_ch, margem_alvo)
                     else:
                         ev_cmd = 0.0 
                 elif current_mode == "ARB (Discharge)":
                     if charger_max_dis > 0: ev_cmd = -min(charger_max_dis, m_exp)
+                elif current_mode == "ARB (Mixed Discharge)":
+                    if nl < 0:
+                        ev_cmd = min(abs(nl), charger_max_ch, margem_alvo)
+                    else:
+                        ev_cmd = 0.0  
 
 
                 if ev_cmd == 0.0 and current_mode not in ["SC (Discharge)", "V2H", "PS", "ARB (Discharge)"]:
@@ -450,7 +454,7 @@ class BessRealTimeController:
                         else:
                             ev_cmd = 0.0
                             
-                # Regra para Contínuos: Se a potência é menor que o mínimo, desliga!
+                # Regra para Contínuos: Se a potência é menor que o mínimo, desliga
                 elif not is_binary and ev_cmd > 0:
                     if ev_cmd < charger_min_ch * 0.95: 
                         ev_cmd = 0.0
