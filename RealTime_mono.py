@@ -292,6 +292,11 @@ class BessRealTimeController:
         # 1. Calcular a carga líquida da casa (Consumo - Produção Solar)
         net_load = pl_val - pv_val
         
+        # Se a carga real for maior que o limite da casa, o RTO ignora o Otimizador e entra imediatamente em Peak Shaving
+        if net_load > self.P_GRID_MAX:
+            logger.warning(f"EMERGENCY PEAK SHAVING: Net Load ({net_load:.2f} kW) exceeds Grid Limit ({self.P_GRID_MAX} kW)")
+            current_mode = "PS"
+        
         # ====================================================================
         # LIMITES FÍSICOS DA BATERIA (BESS)
         # ====================================================================
@@ -503,7 +508,7 @@ class BessRealTimeController:
             return cmds, acts, nl, m_imp, m_exp
 
 
-        # 1. Calcula as margens iniciais de energia que o Quadro Elétrico ainda suporta
+
         margem_import = max(0.0, self.P_GRID_MAX - net_load)
         margem_export = max(0.0, self.P_GRID_MAX + net_load)
         
@@ -758,7 +763,7 @@ def main():
     # 2. DESENHAR AS BARRAS DE PRODUÇÃO (Empilhadas)
     ax1.bar(x_prod, pv_w, width, label='PV Generation', color='#5fb060', edgecolor='black', linewidth=0.5, zorder=3)
     ax1.bar(x_prod, b_dis_w, width, bottom=pv_w, label='BESS Discharge', color='#8a2be2', edgecolor='black', linewidth=0.5, zorder=3)
-    ax1.bar(x_prod, ev_dis_w, width, bottom=pv_w + b_dis_w, label='EV Discharge', color='#e3242b', edgecolor='black', linewidth=0.5, zorder=3)
+    #ax1.bar(x_prod, ev_dis_w, width, bottom=pv_w + b_dis_w, label='EV Discharge', color='#e3242b', edgecolor='black', linewidth=0.5, zorder=3)
     # 3. LINHAS DE REDE (Mantêm-se como Steps para cobrir a hora inteira)
     t_ext = np.insert(time_steps, 0, 0)
     imp_ext = np.insert(imp_w, 0, imp_w[0])
